@@ -1,0 +1,6 @@
+{
+  "general": "Usage: sudo [-a|--admin|-s|--system|-t|--ti] <application> [arguments...]\nsudo -c <rule> <value>\nsudo -h | -? | /? [command]\n\nPrivilege options:\n  -a, --admin    Run as administrator\n  -s, --system   Run as SYSTEM\n  -t, --ti       Run as TrustedInstaller\n\nConfig options:\n  -c <rule> <value>   Set config rule\n  -c -h               Show config help\n  -c <rule> -h        Show help for a config rule\n\nExamples:\n  sudo -s notepad.exe\n  sudo -c default_privilege system\n  sudo -c default_mode create_new_window\n  sudo -h\n  sudo -c -h\n  sudo -c default_mode -h\n",
+  "c": "Config command usage:\n  sudo -c <rule> <value>\n  sudo -c -h\n  sudo -c <rule> -h\n\nAvailable rules:\n  default_privilege: admin, system, ti\n  default_mode: inline, create_new_window, input_disabled\n",
+  "default_privilege": "Rule: default_privilege\nSets the default privilege level for sudo.\nValues: admin, system, ti\nExample: sudo -c default_privilege system\n",
+  "default_mode": "Rule: default_mode\nSets the default launch mode for sudo.\nValues: inline, create_new_window, input_disabled\nExample: sudo -c default_mode create_new_window\n"
+}
