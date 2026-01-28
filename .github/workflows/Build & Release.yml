@@ -1,17 +1,9 @@
-name: Build & Smart Release
+name: Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
-
-env:
-  SOLUTION_FILE_PATH: sudo.sln
-  BUILD_CONFIGURATION: Release
-
-permissions:
-  contents: write
 
 jobs:
   build:
@@ -19,188 +11,26 @@ jobs:
 
     strategy:
       matrix:
-        platform: [x86, x64]
+        arch: [x86, x64]
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Map matrix platform to MSBuild platform
-      id: map
-      shell: pwsh
-      run: |
-        if ("${{ matrix.platform }}" -eq "x86") {
-          echo "MSBUILD_PLATFORM=Win32" >> $env:GITHUB_ENV
-        } else {
-          echo "MSBUILD_PLATFORM=x64" >> $env:GITHUB_ENV
-        }
+      - name: Build ${{ matrix.arch }}
+        run: |
+          msbuild sudo.sln /p:Configuration=Release /p:Platform=${{ matrix.arch }}
 
-    - name: Restore NuGet packages
-      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
+      - name: Package ZIP
+        run: |
+          mkdir out
+          powershell Compress-Archive -Path "Release/${{ matrix.arch }}/*" -DestinationPath "out/sudo-${{ matrix.arch }}.zip" -Force
 
-    - name: Build ${{ matrix.platform }}
-      run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ env.MSBUILD_PLATFORM }} ${{ env.SOLUTION_FILE_PATH }}
-
-    - name: Get short SHA
-      id: slug
-      shell: pwsh
-      run: echo "sha8=$(git rev-parse --short=8 HEAD)" >> $env:GITHUB_OUTPUT
-
-    - name: Create artifact directory and collect files
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path artifact | Out-Null
-        $outDir = Join-Path "${{ env.MSBUILD_PLATFORM }}" "${{ env.BUILD_CONFIGURATION }}"
-        Copy-Item -Path (Join-Path $outDir "sudo.exe") -Destination artifact\
-        Copy-Item -Path "sudo\help.json" -Destination artifact\
-        Copy-Item -Path "sudo\sudo_config.json" -Destination artifact\
-
-    - name: Create ZIP archive
-      id: zip
-      shell: pwsh
-      run: |
-        $arch = "${{ matrix.platform }}"
-        $zipName = "sudo-$arch-${{ steps.slug.outputs.sha8 }}.zip"
-        Compress-Archive -Path artifact\* -DestinationPath $zipName
-        echo "zipName=$zipName" >> $env:GITHUB_OUTPUT
-
-    - name: Upload build artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: sudo-${{ matrix.platform }}-${{ steps.slug.outputs.sha8 }}
-        path: "${{ steps.zip.outputs.zipName }}"
-        if-no-files-found: error
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-
-    - name: List downloaded artifacts
-      run: ls -R artifacts
-
-    - name: Get latest release (if any)
-      id: latest
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const core = require("@actions/core");
-          try {
-            const rel = await github.rest.repos.getLatestRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo
-            });
-            core.setOutput("id", rel.data.id.toString());
-            core.setOutput("tag", rel.data.tag_name);
-          } catch (e) {
-            core.setOutput("id", "");
-            core.setOutput("tag", "");
-          }
-
-    - name: Compare ZIPs and upload only changed ones
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const fs = require("fs");
-          const path = require("path");
-          const crypto = require("crypto");
-          const core = require("@actions/core");
-
-          function sha256(filePath) {
-            const buf = fs.readFileSync(filePath);
-            return crypto.createHash("sha256").update(buf).digest("hex");
-          }
-
-          // Collect all local ZIPs
-          const baseDir = "artifacts";
-          let localZips = [];
-          for (const dir of fs.readdirSync(baseDir)) {
-            const fullDir = path.join(baseDir, dir);
-            if (!fs.statSync(fullDir).isDirectory()) continue;
-            for (const file of fs.readdirSync(fullDir)) {
-              if (file.endsWith(".zip")) {
-                localZips.push(path.join(fullDir, file));
-              }
-            }
-          }
-
-          if (localZips.length === 0) {
-            core.info("No ZIP files found to publish.");
-            return;
-          }
-
-          const latestId = "${{ steps.latest.outputs.id }}";
-          let release;
-
-          if (latestId) {
-            const rel = await github.rest.repos.getRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: Number(latestId)
-            });
-            release = rel.data;
-          } else {
-            const tag = `build-${process.env.GITHUB_SHA.slice(0, 8)}`;
-            const rel = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: tag,
-              name: `Build ${tag}`,
-              draft: false,
-              prerelease: false
-            });
-            release = rel.data;
-          }
-
-          // Build a map of existing assets by name
-          const existingAssets = {};
-          for (const asset of release.assets || []) {
-            existingAssets[asset.name] = asset;
-          }
-
-          const fetch = global.fetch || (await import("node-fetch")).default;
-
-          for (const zipPath of localZips) {
-            const fileName = path.basename(zipPath);
-            const newHash = sha256(zipPath);
-
-            let oldHash = null;
-            if (existingAssets[fileName]) {
-              const url = existingAssets[fileName].browser_download_url;
-              const res = await fetch(url);
-              const buf = Buffer.from(await res.arrayBuffer());
-              oldHash = crypto.createHash("sha256").update(buf).digest("hex");
-            }
-
-            if (newHash === oldHash) {
-              core.info(`Skipping ${fileName}: identical to existing release asset.`);
-              continue;
-            }
-
-            core.info(`Uploading ${fileName}: new or changed.`);
-            const data = fs.readFileSync(zipPath);
-
-            // If asset with same name exists, delete it first
-            if (existingAssets[fileName]) {
-              await github.rest.repos.deleteReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                asset_id: existingAssets[fileName].id
-              });
-            }
-
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              name: fileName,
-              data
-            });
-          }
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sudo-${{ matrix.arch }}
+          path: out/sudo-${{ matrix.arch }}.zip
