@@ -2,7 +2,8 @@ name: Build & Release
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -10,7 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-
     strategy:
       matrix:
         arch: [x86, x64]
@@ -54,23 +54,12 @@ jobs:
         with:
           path: artifacts
 
-      - name: Determine changed files
-        id: changed
-        shell: pwsh
-        run: |
-          $changed = @()
-          $tag = "v${{ github.run_number }}"
-
-          foreach ($file in Get-ChildItem artifacts -Recurse -Filter *.zip) {
-            $changed += $file.FullName
-          }
-
-          $changed -join "`n" | Out-File changed.txt -Encoding ascii
-
-      - name: Create Release
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
           name: sudo build ${{ github.run_number }}
-          files: changed.txt
+          files: |
+            artifacts/sudo-x86/sudo-x86.zip
+            artifacts/sudo-x64/sudo-x64.zip
           overwrite_files: true
