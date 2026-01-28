@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  SOLUTION_FILE_PATH: sudo.sln
+  BUILD_CONFIGURATION: Release
+
+permissions:
+  contents: write   # needed for releases
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        platform: [x86, x64]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet packages
+      run: nuget restore ${{ env.SOLUTION_FILE_PATH }}
+
+    - name: Build ${{ matrix.platform }}
+      run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} /p:Platform=${{ matrix.platform }} ${{ env.SOLUTION_FILE_PATH }}
+
+    - name: Get short SHA
+      id: slug
+      run: echo "sha8=$(git rev-parse --short=8 HEAD)" >> $env:GITHUB_OUTPUT
+
+    - name: Create artifact directory
+      run: |
+        New-Item -ItemType Directory -Force -Path artifact
+        Copy-Item -Path "${{ matrix.platform }}\${{ env.BUILD_CONFIGURATION }}\sudo.exe" -Destination artifact\
+        Copy-Item -Path "sudo\help.json" -Destination artifact\
+        Copy-Item -Path "sudo\sudo_config.json" -Destination artifact\
+
+    - name: Create ZIP archive
+      run: |
+        $arch = "${{ matrix.platform }}" -replace "x86","x86" -replace "x64","amd64"
+        Compress-Archive -Path artifact\* -DestinationPath "sudo-$arch-${{ steps.slug.outputs.sha8 }}.zip"
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sudo-${{ matrix.platform }}-${{ steps.slug.outputs.sha8 }}
+        path: "sudo-${{ matrix.platform == 'x64' && 'amd64' || 'x86' }}-${{ steps.slug.outputs.sha8 }}.zip"
+        if-no-files-found: error
