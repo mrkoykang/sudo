@@ -1,0 +1,78 @@
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+
+    - name: Get latest release
+      id: latest
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const release = await github.rest.repos.getLatestRelease({
+            owner: context.repo.owner,
+            repo: context.repo.repo
+          }).catch(() => null);
+          return release;
+
+    - name: Compare and upload changed assets
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require("fs");
+          const crypto = require("crypto");
+
+          const newFiles = fs.readdirSync(".");
+          const latest = ${{ steps.latest.outputs.result || 'null' }};
+
+          function sha256(path) {
+            return crypto.createHash("sha256").update(fs.readFileSync(path)).digest("hex");
+          }
+
+          let changed = [];
+
+          for (const file of newFiles) {
+            if (!file.endsWith(".zip")) continue;
+
+            const newHash = sha256(file);
+
+            let oldHash = null;
+            if (latest && latest.assets) {
+              const asset = latest.assets.find(a => a.name === file);
+              if (asset) {
+                const res = await fetch(asset.browser_download_url);
+                const buf = Buffer.from(await res.arrayBuffer());
+                oldHash = crypto.createHash("sha256").update(buf).digest("hex");
+              }
+            }
+
+            if (newHash !== oldHash) {
+              changed.push(file);
+            }
+          }
+
+          if (changed.length === 0) {
+            console.log("No changes detected. Skipping release upload.");
+            return;
+          }
+
+          const release = latest
+            ? latest
+            : await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: "v1.0.0",
+                name: "Initial Release"
+              });
+
+          for (const file of changed) {
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: file,
+              data: fs.readFileSync(file)
+            });
+          }
