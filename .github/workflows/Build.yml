@@ -19,6 +19,8 @@ jobs:
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: ${{ matrix.arch }}
 
       - name: Build ${{ matrix.arch }}
         run: |
@@ -27,7 +29,7 @@ jobs:
       - name: Package ZIP
         run: |
           mkdir out
-          powershell Compress-Archive -Path "Release/${{ matrix.arch }}/*" -DestinationPath "out/sudo-${{ matrix.arch }}.zip" -Force
+          powershell Compress-Archive -Path "Release/*" -DestinationPath "out/sudo-${{ matrix.arch }}.zip" -Force
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
