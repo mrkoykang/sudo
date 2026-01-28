@@ -1,0 +1,76 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        arch: [x86, x64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: ${{ matrix.arch }}
+
+      - name: Build ${{ matrix.arch }}
+        run: msbuild sudo.sln /p:Configuration=Release /p:Platform=${{ matrix.arch }}
+
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          mkdir out
+          if ("${{ matrix.arch }}" -eq "x86") {
+            $buildDir = "Release"
+          } else {
+            $buildDir = "x64/Release"
+          }
+          Compress-Archive -Path "$buildDir/*" -DestinationPath "out/sudo-${{ matrix.arch }}.zip" -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sudo-${{ matrix.arch }}
+          path: out/sudo-${{ matrix.arch }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine changed files
+        id: changed
+        shell: pwsh
+        run: |
+          $changed = @()
+          $tag = "v${{ github.run_number }}"
+
+          foreach ($file in Get-ChildItem artifacts -Recurse -Filter *.zip) {
+            $changed += $file.FullName
+          }
+
+          $changed -join "`n" | Out-File changed.txt -Encoding ascii
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: sudo build ${{ github.run_number }}
+          files: changed.txt
+          overwrite_files: true
