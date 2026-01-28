@@ -1,0 +1,71 @@
+name: Smart Release
+
+on:
+  workflow_run:
+    workflows: [ "Build" ]
+    types: [ completed ]
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get Latest Release
+        id: latest
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const rel = await github.rest.repos.getLatestRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            }).catch(() => null);
+            return rel ? rel.data : null;
+
+      - name: Compare Artifacts
+        id: compare
+        run: |
+          $changed = @()
+          foreach ($file in Get-ChildItem artifacts -Recurse -Filter *.zip) {
+            $name = $file.Name
+            $localHash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash
+
+            if ($env:LATEST_ASSETS -notcontains $name) {
+              $changed += $file.FullName
+              continue
+            }
+
+            $remote = "https://github.com/${{ github.repository }}/releases/download/${{ steps.latest.outputs.tag_name }}/$name"
+            $tmp = "$env:TEMP\$name"
+            Invoke-WebRequest -Uri $remote -OutFile $tmp -ErrorAction SilentlyContinue
+
+            if (!(Test-Path $tmp)) {
+              $changed += $file.FullName
+              continue
+            }
+
+            $remoteHash = (Get-FileHash $tmp -Algorithm SHA256).Hash
+            if ($localHash -ne $remoteHash) {
+              $changed += $file.FullName
+            }
+          }
+
+          $changed | Out-File changed.txt -Encoding ascii
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "sudo build ${{ github.run_number }}"
+          files: |
+            @changed.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
