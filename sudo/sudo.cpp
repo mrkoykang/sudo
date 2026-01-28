@@ -64,6 +64,64 @@ DWORD FindProcessId(const wchar_t* processName) {
     return pid;
 }
 
+// ⭐ INSERT EnableAllPrivileges() HERE ⭐
+
+bool EnableAllPrivileges(HANDLE token) {
+    static const LPCWSTR privs[] = {
+        SE_ASSIGNPRIMARYTOKEN_NAME,
+        SE_AUDIT_NAME,
+        SE_BACKUP_NAME,
+        SE_CHANGE_NOTIFY_NAME,
+        SE_CREATE_GLOBAL_NAME,
+        SE_CREATE_PAGEFILE_NAME,
+        SE_CREATE_PERMANENT_NAME,
+        SE_CREATE_SYMBOLIC_LINK_NAME,
+        SE_CREATE_TOKEN_NAME,
+        SE_DEBUG_NAME,
+        SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME,
+        SE_ENABLE_DELEGATION_NAME,
+        SE_IMPERSONATE_NAME,
+        SE_INCREASE_QUOTA_NAME,
+        SE_INC_BASE_PRIORITY_NAME,
+        SE_INC_WORKING_SET_NAME,
+        SE_LOAD_DRIVER_NAME,
+        SE_LOCK_MEMORY_NAME,
+        SE_MACHINE_ACCOUNT_NAME,
+        SE_MANAGE_VOLUME_NAME,
+        SE_PROF_SINGLE_PROCESS_NAME,
+        SE_RELABEL_NAME,
+        SE_REMOTE_SHUTDOWN_NAME,
+        SE_RESTORE_NAME,
+        SE_SECURITY_NAME,
+        SE_SHUTDOWN_NAME,
+        SE_SYNC_AGENT_NAME,
+        SE_SYSTEM_ENVIRONMENT_NAME,
+        SE_SYSTEM_PROFILE_NAME,
+        SE_SYSTEMTIME_NAME,
+        SE_TAKE_OWNERSHIP_NAME,
+        SE_TCB_NAME,
+        SE_TIME_ZONE_NAME,
+        SE_TRUSTED_CREDMAN_ACCESS_NAME,
+        SE_UNDOCK_NAME,
+        SE_UNSOLICITED_INPUT_NAME
+    };
+
+    TOKEN_PRIVILEGES tp = {};
+    tp.PrivilegeCount = _countof(privs);
+
+    for (DWORD i = 0; i < tp.PrivilegeCount; ++i) {
+        if (!LookupPrivilegeValueW(nullptr, privs[i], &tp.Privileges[i].Luid)) {
+            continue;
+        }
+        tp.Privileges[i].Attributes = SE_PRIVILEGE_ENABLED;
+    }
+
+    if (!AdjustTokenPrivileges(token, FALSE, &tp, 0, nullptr, nullptr)) {
+        return false;
+    }
+    return GetLastError() == ERROR_SUCCESS;
+}
+
 // Start TrustedInstaller service if not running
 bool StartTrustedInstallerService() {
     SC_HANDLE hSCM = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
@@ -128,6 +186,11 @@ bool LaunchAsProcessToken(DWORD pid, const wstring& appPath, const wstring& args
         return false;
     }
     CloseHandle(hToken);
+
+    // Try to enable all privileges on the duplicated token
+    if (!EnableAllPrivileges(hDupToken)) {
+        DEBUG_OUT("EnableAllPrivileges failed or partial; continuing anyway.");
+    }
 
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = {};
@@ -451,13 +514,22 @@ int wmain(int argc, wchar_t* argv[]) {
             ShellExecuteW(NULL, L"runas", exePath, params.c_str(), NULL, SW_SHOW);
             return 0;
         }
-        int result = (int)ShellExecuteW(NULL, L"runas", appPath.c_str(), args.empty() ? NULL : args.c_str(), NULL,
-            launchMode == LaunchMode::CreateNewWindow ? SW_SHOWNORMAL : SW_SHOWDEFAULT);
-        DEBUG_OUT("ShellExecuteW result: " << result);
-        if (result <= 32) {
+
+        HINSTANCE result = ShellExecuteW(
+            NULL, L"runas",
+            appPath.c_str(),
+            args.empty() ? NULL : args.c_str(),
+            NULL,
+            launchMode == LaunchMode::CreateNewWindow ? SW_SHOWNORMAL : SW_SHOWDEFAULT
+        );
+
+        DEBUG_OUT("ShellExecuteW result: " << (INT_PTR)result);
+
+        if ((INT_PTR)result <= 32) {
             wcerr << L"Application execution failed" << endl;
             return 1;
         }
+
         return 0;
     }
 
@@ -522,3 +594,5 @@ int wmain(int argc, wchar_t* argv[]) {
     wcerr << L"Unknown mode." << endl;
     return 1;
 }
+
+
